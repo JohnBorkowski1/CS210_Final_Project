@@ -28,7 +28,6 @@ struct CityKeyHasher {
     }
 };
 
-// === Cache Interface ===
 class ICache {
 public:
     virtual bool get(const CityKey& key, double& population) = 0;
@@ -37,20 +36,17 @@ public:
     virtual ~ICache() {}
 };
 
-
 class LFUCache : public ICache {
 private:
     int capacity;
     unordered_map<CityKey, pair<double, int>, CityKeyHasher> values;
-    unordered_map<CityKey, list<CityKey>::iterator, CityKeyHasher> positions;
-    list<CityKey> lfuList;
 
 public:
     LFUCache(int cap) : capacity(cap) {}
 
     bool get(const CityKey& key, double& population) override {
         if (values.find(key) == values.end()) return false;
-        values[key].second++; // Increase frequency
+        values[key].second++;
         population = values[key].first;
         return true;
     }
@@ -160,16 +156,63 @@ public:
     }
 };
 
-double searchCSV(const string& filename, const CityKey& key) {
+struct TrieNode {
+    unordered_map<char, TrieNode*> children;
+    unordered_map<string, double> countryPopMap;
+    bool isEndOfCity = false;
+};
+
+class CityTrie {
+private:
+    TrieNode* root;
+
+public:
+    CityTrie() { root = new TrieNode(); }
+
+    void insert(const string& city, const string& country, double population) {
+        TrieNode* node = root;
+        for (char c : city) {
+            if (!node->children.count(c))
+                node->children[c] = new TrieNode();
+            node = node->children[c];
+        }
+        node->isEndOfCity = true;
+        node->countryPopMap[country] = population;
+    }
+
+    bool search(const string& city, const string& country, double& population) {
+        TrieNode* node = root;
+        for (char c : city) {
+            if (!node->children.count(c)) return false;
+            node = node->children[c];
+        }
+        if (node->isEndOfCity && node->countryPopMap.count(country)) {
+            population = node->countryPopMap[country];
+            return true;
+        }
+        return false;
+    }
+
+    ~CityTrie() {
+        freeNode(root);
+    }
+
+    void freeNode(TrieNode* node) {
+        for (auto& [c, child] : node->children)
+            freeNode(child);
+        delete node;
+    }
+};
+
+void loadDataIntoTrie(const string& filename, CityTrie& trie) {
     ifstream file(filename);
     if (!file.is_open()) {
         cerr << "Error opening file" << endl;
-        return -1;
+        return;
     }
 
     string line;
-    getline(file, line); // Skip header
-
+    getline(file, line);
     while (getline(file, line)) {
         stringstream ss(line);
         string countryCode, cityName, populationStr;
@@ -180,12 +223,9 @@ double searchCSV(const string& filename, const CityKey& key) {
         transform(countryCode.begin(), countryCode.end(), countryCode.begin(), ::tolower);
         transform(cityName.begin(), cityName.end(), cityName.begin(), ::tolower);
 
-        if (countryCode == key.countryCode && cityName == key.cityName) {
-            return stod(populationStr);
-        }
+        double population = stod(populationStr);
+        trie.insert(cityName, countryCode, population);
     }
-
-    return -1;
 }
 
 int main() {
@@ -204,9 +244,13 @@ int main() {
         return 1;
     }
 
+    CityTrie trie;
+    loadDataIntoTrie(filename, trie);
+    cout << "Trie loaded successfully.\\n";
+
     while (true) {
         string countryCode, cityName;
-        cout << "\nEnter country code or 'exit' to quit: ";
+        cout << "\\nEnter country code or 'exit' to quit: ";
         cin >> countryCode;
         if (countryCode == "exit") break;
         cout << "Enter city name: ";
@@ -221,14 +265,11 @@ int main() {
 
         if (cache->get(key, population)) {
             cout << "Population (from cache): " << population << endl;
+        } else if (trie.search(cityName, countryCode, population)) {
+            cache->put(key, population);
+            cout << "Population (from trie): " << population << endl;
         } else {
-            population = searchCSV(filename, key);
-            if (population >= 0) {
-                cache->put(key, population);
-                cout << "Population (from file): " << population << endl;
-            } else {
-                cout << "City not found." << endl;
-            }
+            cout << "City not found." << endl;
         }
 
         cache->displayCache();
